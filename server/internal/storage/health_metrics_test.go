@@ -4,7 +4,47 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/claude/freereps/internal/models"
+	"github.com/google/uuid"
 )
+
+// TestCollapseHealthMetricRowsPreventsDoubleUpsert exists because PostgreSQL
+// rejects an ON CONFLICT DO UPDATE statement that affects one natural key
+// twice. Mutable aggregates keep the last value in a payload, while different
+// immutable UUIDs keep the first value as the old DO NOTHING path did.
+func TestCollapseHealthMetricRowsPreventsDoubleUpsert(t *testing.T) {
+	at := time.Date(2026, 9, 13, 4, 30, 0, 100, time.UTC)
+	value := func(v float64) *float64 { return &v }
+
+	partial := models.HealthMetricRow{
+		Time: at, UserID: 1, MetricName: "step_count", Units: "count", Qty: value(21),
+	}
+	corrected := partial
+	corrected.Time = at.Add(800 * time.Nanosecond) // same PostgreSQL microsecond
+	corrected.Qty = value(1821)
+
+	got := collapseHealthMetricRows([]models.HealthMetricRow{partial, corrected})
+	if len(got) != 1 || got[0].Qty == nil || *got[0].Qty != 1821 {
+		t.Fatalf("collapsed aggregate = %#v, want one row with qty 1821", got)
+	}
+
+	firstID := uuid.New()
+	secondID := uuid.New()
+	first := models.HealthMetricRow{
+		Time: at, UserID: 1, MetricName: "resting_heart_rate", Units: "bpm",
+		Qty: value(55), SourceUUID: &firstID,
+	}
+	second := first
+	second.Qty = value(72)
+	second.SourceUUID = &secondID
+
+	got = collapseHealthMetricRows([]models.HealthMetricRow{first, second})
+	if len(got) != 1 || got[0].Qty == nil || *got[0].Qty != 55 ||
+		got[0].SourceUUID == nil || *got[0].SourceUUID != firstID {
+		t.Fatalf("collapsed immutable samples = %#v, want the first UUID-backed row", got)
+	}
+}
 
 // TestSourcePriorityCaseSQL verifies that the SQL CASE expression correctly
 // maps source names to priority numbers, ensuring higher-priority sources

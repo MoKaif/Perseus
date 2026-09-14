@@ -16,6 +16,40 @@ the fix was verified, this file does not claim it was.
 
 ---
 
+## 2026-09-14 — Resent HealthKit step totals were discarded as duplicates
+
+**Symptoms.** Apple Health showed more than 6,000 steps for 2026-09-13, while
+FreeReps stored and displayed 251. The database held only six hourly buckets for
+that day, including 21 steps at 09:00 and 96 at 10:00. A sync on 2026-09-14
+received 823 metric rows but changed only 17; three retries then received 4,950
+rows and changed none.
+
+**Root cause.** The iOS companion uses `HKStatisticsCollectionQuery` to send
+cumulative metrics such as steps in one-hour buckets. A background sync during
+an hour sends that hour's partial total. Later syncs send the completed total
+under the same `(metric_name, source, time, user_id)` key, but
+`InsertHealthMetrics` used `ON CONFLICT DO NOTHING`, so the first partial value
+became permanent. The same failure applied to energy, exercise time, distance,
+flights climbed and every other mutable aggregate row.
+
+**Fix.** `InsertHealthMetrics` now updates a conflicting metric when its values
+changed and both rows have no source UUID, or when their source UUID is the
+same. An exact repeat still affects zero rows. A different UUID at the same
+natural key remains insert-once so one immutable HealthKit sample cannot replace
+another. Database integration tests cover a corrected step bucket, an exact
+repeat and a distinct-UUID collision.
+
+Rows already stored with partial totals are corrected when the iOS companion
+resends its overlapping window after the fixed server deploys. History outside
+that window needs an explicit backfill; the discarded values cannot be
+reconstructed from `import_logs`, which records counts rather than payloads.
+
+**Lesson.** Idempotency for a provider aggregate means upserting the provider's
+latest value under a stable key; insert-once semantics are valid only for
+immutable source records.
+
+---
+
 ## 2026-08-10 — The Alpha Progression history was stored twice, offset by the Berlin UTC offset
 
 **Symptoms.** `get_strength_summary` reported 378 working sets and 171,869 kg of

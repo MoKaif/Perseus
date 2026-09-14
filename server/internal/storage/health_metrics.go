@@ -112,12 +112,20 @@ var cumulativeMetrics = map[string]bool{
 // divided by 12 parameters per row, with headroom.
 const maxRowsPerBatch = 5000
 
-// InsertHealthMetrics batch-inserts health metric rows. Returns the number actually inserted
-// (skipped duplicates via ON CONFLICT DO NOTHING).
+// InsertHealthMetrics batch-inserts health metric rows. A matching mutable row
+// (no source UUID) is updated when its values changed: HealthKit cumulative
+// statistics include the current, incomplete clock bucket, then report the
+// completed value under the same natural key on the next sync. UUID-backed
+// samples only update when the UUID is unchanged, so two immutable samples
+// that happen to share a timestamp are not silently merged.
+//
+// The returned count includes inserts and value-changing updates. Exact
+// repeats affect zero rows and remain idempotent.
 func (db *DB) InsertHealthMetrics(ctx context.Context, rows []models.HealthMetricRow) (int64, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
+	rows = collapseHealthMetricRows(rows)
 
 	var totalInserted int64
 	for start := 0; start < len(rows); start += maxRowsPerBatch {
@@ -132,6 +140,43 @@ func (db *DB) InsertHealthMetrics(ctx context.Context, rows []models.HealthMetri
 		totalInserted += inserted
 	}
 	return totalInserted, nil
+}
+
+type healthMetricNaturalKey struct {
+	timeMicros int64
+	userID     int
+	metricName string
+	source     string
+}
+
+// collapseHealthMetricRows ensures one INSERT statement never tries to update
+// the same PostgreSQL row twice, which ON CONFLICT DO UPDATE rejects. Later
+// mutable values and later values for the same UUID win inside one payload;
+// different UUIDs retain the existing insert-once behavior.
+func collapseHealthMetricRows(rows []models.HealthMetricRow) []models.HealthMetricRow {
+	result := make([]models.HealthMetricRow, 0, len(rows))
+	indexes := make(map[healthMetricNaturalKey]int, len(rows))
+	for _, row := range rows {
+		key := healthMetricNaturalKey{
+			timeMicros: row.Time.UnixMicro(),
+			userID:     row.UserID,
+			metricName: row.MetricName,
+			source:     row.Source,
+		}
+		index, exists := indexes[key]
+		if !exists {
+			indexes[key] = len(result)
+			result = append(result, row)
+			continue
+		}
+
+		existing := result[index]
+		if (existing.SourceUUID == nil && row.SourceUUID == nil) ||
+			(existing.SourceUUID != nil && row.SourceUUID != nil && *existing.SourceUUID == *row.SourceUUID) {
+			result[index] = row
+		}
+	}
+	return result
 }
 
 func (db *DB) insertHealthMetricsBatch(ctx context.Context, rows []models.HealthMetricRow) (int64, error) {
@@ -150,7 +195,36 @@ VALUES `
 			r.Qty, r.MinVal, r.AvgVal, r.MaxVal, r.Systolic, r.Diastolic, r.SourceUUID)
 	}
 
-	query += strings.Join(valueStrings, ",") + " ON CONFLICT DO NOTHING"
+	query += strings.Join(valueStrings, ",") + `
+ON CONFLICT (metric_name, source, time, user_id) DO UPDATE SET
+    units = EXCLUDED.units,
+    qty = EXCLUDED.qty,
+    min_val = EXCLUDED.min_val,
+    avg_val = EXCLUDED.avg_val,
+    max_val = EXCLUDED.max_val,
+    systolic = EXCLUDED.systolic,
+    diastolic = EXCLUDED.diastolic
+WHERE (
+        (health_metrics.source_uuid IS NULL AND EXCLUDED.source_uuid IS NULL)
+        OR health_metrics.source_uuid = EXCLUDED.source_uuid
+    )
+  AND ROW(
+        health_metrics.units,
+        health_metrics.qty,
+        health_metrics.min_val,
+        health_metrics.avg_val,
+        health_metrics.max_val,
+        health_metrics.systolic,
+        health_metrics.diastolic
+      ) IS DISTINCT FROM ROW(
+        EXCLUDED.units,
+        EXCLUDED.qty,
+        EXCLUDED.min_val,
+        EXCLUDED.avg_val,
+        EXCLUDED.max_val,
+        EXCLUDED.systolic,
+        EXCLUDED.diastolic
+      )`
 
 	tag, err := db.Pool.Exec(ctx, query, args...)
 	if err != nil {
