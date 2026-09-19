@@ -138,7 +138,7 @@ export default function DashboardPage() {
   const basal = metrics.get("basal_energy_burned");
   const walkingSpeed = metrics.get("walking_speed");
   const heartRate = metrics.get("heart_rate");
-  const sleep = sleepQuery.data?.sessions.find(
+  const sleep = (sleepQuery.data?.sessions ?? []).find(
     (session) => session.Date.slice(0, 10) === selected,
   ) ?? null;
   const selectedDate = dateFromKey(selected);

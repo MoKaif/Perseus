@@ -238,7 +238,13 @@ export async function fetchSleep(
   const params = new URLSearchParams({ start, end });
   const res = await fetch(`${BASE}/sleep?${params}`);
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
-  return res.json();
+  const data = (await res.json()) as Partial<SleepResponse>;
+  // Go encodes nil slices as null. Keep every consumer on the simpler array
+  // contract while a user is waiting for their first sleep session.
+  return {
+    sessions: data.sessions ?? [],
+    stages: data.stages ?? [],
+  };
 }
 
 // --- Workouts ---
