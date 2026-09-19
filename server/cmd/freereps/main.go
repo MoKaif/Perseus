@@ -117,6 +117,7 @@ func main() {
 	// Create server
 	server.Version = Version
 	srv := server.New(db, healthProvider, alphaProvider, log)
+	srv.SetDevMode(cfg.Server.DevUserID, cfg.Server.DevReadOnly)
 
 	// Start Oura sync (always runs; no-ops if no users have Oura tokens)
 	ouraClient := oura.NewClient()
@@ -125,25 +126,34 @@ func main() {
 
 	syncCtx, syncCancel := context.WithCancel(ctx)
 	defer syncCancel()
-	go ouraSyncer.Run(syncCtx)
+	if !cfg.Server.DevReadOnly {
+		go ouraSyncer.Run(syncCtx)
+		log.Info("oura sync started", "interval", cfg.Oura.SyncInterval)
+	}
 
 	srv.SetOura(tokenMgr, ouraSyncer)
-	log.Info("oura sync started", "interval", cfg.Oura.SyncInterval)
 
 	// Start Hevy sync (always runs; no-ops if no users have an API key)
 	hevySyncer := hevy.NewSyncer(hevy.NewClient(), db, cfg.Hevy, log)
-	go hevySyncer.Run(syncCtx)
+	if !cfg.Server.DevReadOnly {
+		go hevySyncer.Run(syncCtx)
+		log.Info("hevy sync started", "interval", cfg.Hevy.SyncInterval)
+	}
 
 	srv.SetHevy(hevySyncer)
-	log.Info("hevy sync started", "interval", cfg.Hevy.SyncInterval)
 
 	// Start Withings sync (always runs; no-ops if no users have authorized)
 	withingsTokenMgr := withings.NewTokenManager(db)
 	withingsSyncer := withings.NewSyncer(withings.NewClient(), withingsTokenMgr, db, cfg.Withings, log)
-	go withingsSyncer.Run(syncCtx)
+	if !cfg.Server.DevReadOnly {
+		go withingsSyncer.Run(syncCtx)
+		log.Info("withings sync started", "interval", cfg.Withings.SyncInterval)
+	}
 
 	srv.SetWithings(withingsTokenMgr, withingsSyncer)
-	log.Info("withings sync started", "interval", cfg.Withings.SyncInterval)
+	if cfg.Server.DevReadOnly {
+		log.Info("provider background sync disabled", "reason", "read-only development mode")
+	}
 
 	// Mount MCP SSE server
 	mcpSrv := freerepsmcp.New(db, Version, log)

@@ -29,8 +29,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host        string `yaml:"host"`
+	Port        int    `yaml:"port"`
+	DevUserID   int    `yaml:"dev_user_id"`
+	DevReadOnly bool   `yaml:"dev_read_only"`
 }
 
 type DatabaseConfig struct {
@@ -115,6 +117,7 @@ func (d DatabaseConfig) DSN() string {
 //	FREEREPS_INGEST_TIMEZONE
 func Load(path string) (*Config, error) {
 	cfg := &Config{
+		Server: ServerConfig{DevUserID: 1},
 		Tailscale: TailscaleConfig{
 			Enabled:  true,
 			Hostname: "freereps",
@@ -217,6 +220,14 @@ func applyEnvOverrides(cfg *Config) {
 		if port, err := strconv.Atoi(v); err == nil {
 			cfg.Server.Port = port
 		}
+	}
+	if v := os.Getenv("FREEREPS_DEV_USER_ID"); v != "" {
+		if userID, err := strconv.Atoi(v); err == nil && userID > 0 {
+			cfg.Server.DevUserID = userID
+		}
+	}
+	if v := os.Getenv("FREEREPS_DEV_READ_ONLY"); v != "" {
+		cfg.Server.DevReadOnly, _ = strconv.ParseBool(v)
 	}
 	if v := os.Getenv("FREEREPS_DB_HOST"); v != "" {
 		cfg.Database.Host = v

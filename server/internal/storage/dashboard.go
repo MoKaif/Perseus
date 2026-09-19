@@ -42,7 +42,7 @@ type DashboardMetric struct {
 // GetDailySeries returns per-day aggregated values for several metrics in one
 // query. Cumulative metrics are summed per day, the rest averaged, matching
 // GetTimeSeries. Source priority deduplication is applied first.
-func (db *DB) GetDailySeries(ctx context.Context, userID int, metricNames []string, start, end time.Time) (map[string][]DailyPoint, error) {
+func (db *DB) GetDailySeries(ctx context.Context, userID int, metricNames []string, start, end time.Time, timezone string) (map[string][]DailyPoint, error) {
 	if len(metricNames) == 0 {
 		return map[string][]DailyPoint{}, nil
 	}
@@ -54,6 +54,8 @@ func (db *DB) GetDailySeries(ctx context.Context, userID int, metricNames []stri
 		params[i] = fmt.Sprintf("$%d", i+2)
 		args = append(args, name)
 	}
+	timezoneParam := fmt.Sprintf("$%d", len(args)+1)
+	args = append(args, timezone)
 	// Literals, not parameters: the planner has to see the bounds to exclude
 	// chunks while planning. See sqlTimestamp.
 	startParam := sqlTimestamp(start)
@@ -82,13 +84,13 @@ func (db *DB) GetDailySeries(ctx context.Context, userID int, metricNames []stri
 	}
 
 	query := fmt.Sprintf(
-		`%sSELECT metric_name, time_bucket('1 day', time) AS day, %s AS val
+		`%sSELECT metric_name, (time AT TIME ZONE %s)::date AS day, %s AS val
 		 FROM deduped
 		 WHERE rn = 1
 		 GROUP BY metric_name, day
 		 HAVING %s IS NOT NULL
 		 ORDER BY metric_name, day ASC`,
-		cte, aggExpr, aggExpr)
+		cte, timezoneParam, aggExpr, aggExpr)
 
 	rows, err := db.Pool.Query(ctx, query, args...)
 	if err != nil {

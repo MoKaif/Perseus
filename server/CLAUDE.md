@@ -5,6 +5,27 @@
 - Frontend stub for Go build: `mkdir -p server/web/dist && touch server/web/dist/.gitkeep`
 - Frontend build: `cd server/web && npm ci && npm run build`
 
+## LAN UI development with real data
+
+The development API uses the existing PostgreSQL service, binds only to
+`127.0.0.1:8081`, assumes local user 2, rejects every HTTP mutation, and does
+not run provider background sync:
+
+```bash
+docker compose -f server/compose.dev.yml up -d --build
+cd server/web
+npm run dev:lan
+```
+
+Open `http://<this-machine's-LAN-IP>:5174` from another device on the same LAN.
+Vite hot-reloads frontend edits and proxies `/api` to the loopback API. Set
+`PERSEUS_DEV_USER_ID` before the compose command if the real data belongs to a
+different Perseus user. Stop it with:
+
+```bash
+docker compose -f server/compose.dev.yml down
+```
+
 ## Integration tests
 
 `go test ./...` skips them. They need a PostgreSQL server in `FREEREPS_TEST_DSN`

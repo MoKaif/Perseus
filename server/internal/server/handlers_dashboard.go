@@ -17,7 +17,7 @@ const defaultFrontPageWindowDays = 30
 // reads the same endpoint, which is why 6m is here but absent from the
 // dashboard's own control.
 var frontPageRanges = map[string]int{
-	"1d": 1, "7d": 7, "30d": 30, "90d": 90, "6m": 182, "1y": 365,
+	"1d": 1, "7d": 7, "30d": 30, "90d": 90, "6m": 182, "1y": 365, "2y": 730,
 }
 
 // frontPageMetric is one row of the front page: the metric's metadata, its
@@ -67,6 +67,15 @@ func (s *Server) handleLatestMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	timezone := r.URL.Query().Get("timezone")
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid timezone"})
+		return
+	}
 
 	available, err := s.db.GetAvailableMetrics(ctx, uid)
 	if err != nil {
@@ -94,9 +103,8 @@ func (s *Server) handleLatestMetrics(w http.ResponseWriter, r *http.Request) {
 		bufferDays = storage.DeltaWindowDays
 	}
 
-	end := time.Now().Truncate(24*time.Hour).AddDate(0, 0, 1)
-	start := end.AddDate(0, 0, -bufferDays)
-	windowStart := end.AddDate(0, 0, -windowDays)
+	start, end, seriesStart := dashboardWindow(time.Now(), loc, bufferDays)
+	windowStart := seriesStart.AddDate(0, 0, bufferDays-windowDays)
 
 	var (
 		latest    []models.HealthMetricRow
@@ -118,7 +126,7 @@ func (s *Server) handleLatestMetrics(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer wg.Done()
-		series, errSeries = s.db.GetDailySeries(ctx, uid, names, start, end)
+		series, errSeries = s.db.GetDailySeries(ctx, uid, names, start, end, timezone)
 	}()
 	go func() {
 		defer wg.Done()
@@ -146,7 +154,7 @@ func (s *Server) handleLatestMetrics(w http.ResponseWriter, r *http.Request) {
 	metrics := make([]frontPageMetric, 0, len(visible))
 	for _, meta := range visible {
 		points := series[meta.MetricName]
-		s, delta, deltaPct, low, high := storage.BuildDashboardMetric(points, start, bufferDays, windowDays)
+		s, delta, deltaPct, low, high := storage.BuildDashboardMetric(points, seriesStart, bufferDays, windowDays)
 
 		fp := frontPageMetric{
 			MetricName:   meta.MetricName,
@@ -190,6 +198,17 @@ func (s *Server) handleLatestMetrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Cache-Control", "private, max-age=60")
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// dashboardWindow describes whole local calendar days while keeping the series
+// labels at UTC midnight. Separating instants from labels prevents late-night
+// HealthKit samples from landing on the adjacent day in non-UTC timezones.
+func dashboardWindow(now time.Time, loc *time.Location, days int) (start, end, seriesStart time.Time) {
+	localNow := now.In(loc)
+	end = time.Date(localNow.Year(), localNow.Month(), localNow.Day()+1, 0, 0, 0, 0, loc)
+	start = end.AddDate(0, 0, -days)
+	seriesStart = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	return start, end, seriesStart
 }
 
 // handleWorkoutZones returns the per-zone share of each workout in the range,

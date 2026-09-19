@@ -22,12 +22,14 @@ import (
 
 // Server holds dependencies for HTTP handlers.
 type Server struct {
-	db     *storage.DB
-	health *health.Provider
-	alpha  *alpha.Provider
-	log    *slog.Logger
-	lc     *local.Client
-	router chi.Router
+	db          *storage.DB
+	health      *health.Provider
+	alpha       *alpha.Provider
+	log         *slog.Logger
+	lc          *local.Client
+	router      chi.Router
+	devUserID   int
+	devReadOnly bool
 
 	// Oura integration (nil if disabled)
 	ouraTokenMgr *oura.TokenManager
@@ -71,14 +73,24 @@ var Version = "dev"
 // New creates a new Server with all routes configured.
 func New(db *storage.DB, healthProvider *health.Provider, alphaProvider *alpha.Provider, log *slog.Logger) *Server {
 	s := &Server{
-		db:     db,
-		health: healthProvider,
-		alpha:  alphaProvider,
-		log:    log,
-		router: chi.NewRouter(),
+		db:        db,
+		health:    healthProvider,
+		alpha:     alphaProvider,
+		log:       log,
+		router:    chi.NewRouter(),
+		devUserID: 1,
 	}
 	s.routes()
 	return s
+}
+
+// SetDevMode selects the local identity and can prohibit all HTTP mutations.
+// It has no effect once Tailscale identity is configured.
+func (s *Server) SetDevMode(userID int, readOnly bool) {
+	if userID > 0 {
+		s.devUserID = userID
+	}
+	s.devReadOnly = readOnly
 }
 
 // SetTailscale configures the Tailscale LocalClient for identity resolution.
@@ -118,7 +130,7 @@ func (s *Server) identityMiddleware() func(http.Handler) http.Handler {
 			if s.lc != nil {
 				TailscaleIdentity(s.lc, s.db, s.log)(next).ServeHTTP(w, r)
 			} else {
-				DevIdentity(next).ServeHTTP(w, r)
+				DevIdentityFor(s.devUserID, next).ServeHTTP(w, r)
 			}
 		})
 	}
@@ -134,6 +146,7 @@ func (s *Server) routes() {
 	// All routes require identity (Tailscale or dev fallback).
 	s.router.Group(func(r chi.Router) {
 		r.Use(s.identityMiddleware())
+		r.Use(s.devReadOnlyMiddleware())
 
 		// Ingest endpoints
 		r.Route("/api/v1/ingest", func(r chi.Router) {
@@ -223,6 +236,18 @@ func (s *Server) routes() {
 		r.Get("/api/v1/import/hae-tcp/status", s.handleHAEImportStatus)
 		r.Get("/api/v1/import/hae-tcp/events", s.handleHAEImportEvents)
 	})
+}
+
+func (s *Server) devReadOnlyMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if s.lc == nil && s.devReadOnly && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "LAN development mode is read-only"})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // SetFrontend mounts the embedded SPA filesystem.

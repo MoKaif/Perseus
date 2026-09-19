@@ -102,8 +102,10 @@ export interface FrontPageResponse {
 
 export async function fetchFrontPage(
   range: string = "30d",
+  timezone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
 ): Promise<FrontPageResponse> {
-  const res = await fetch(`${BASE}/metrics/latest?range=${range}`);
+  const params = new URLSearchParams({ range, timezone });
+  const res = await fetch(`${BASE}/metrics/latest?${params}`);
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
   return res.json();
 }

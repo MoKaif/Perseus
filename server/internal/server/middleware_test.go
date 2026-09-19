@@ -37,6 +37,18 @@ func TestDevIdentity(t *testing.T) {
 	}
 }
 
+// TestDevIdentityForUsesExplicitUser prevents the LAN preview from silently
+// falling back to user 1 and displaying an empty or unrelated dashboard.
+func TestDevIdentityForUsesExplicitUser(t *testing.T) {
+	handler := DevIdentityFor(2, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := userIDFromContext(r)
+		if !ok || userID != 2 {
+			t.Fatalf("user identity = %d, %v; want 2, true", userID, ok)
+		}
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+}
+
 // TestUserIDFromContextMissing verifies that userIDFromContext returns (0, false)
 // when no identity middleware has set a value, ensuring loud failure detection.
 func TestUserIDFromContextMissing(t *testing.T) {

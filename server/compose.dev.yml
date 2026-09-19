@@ -1,0 +1,27 @@
+name: perseus-dev
+
+# The API stays on loopback. Vite is the only LAN-facing process and proxies
+# read requests to it, giving the frontend real data with instant HMR updates.
+services:
+  api:
+    build:
+      context: .
+    container_name: perseus-dev-api
+    network_mode: host
+    env_file:
+      - path: ../.env
+        required: true
+    environment:
+      FREEREPS_TS_ENABLED: "false"
+      FREEREPS_SERVER_HOST: "127.0.0.1"
+      FREEREPS_SERVER_PORT: "8081"
+      FREEREPS_DEV_USER_ID: "${PERSEUS_DEV_USER_ID:-2}"
+      FREEREPS_DEV_READ_ONLY: "true"
+    volumes:
+      - ./config.example.yaml:/app/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8081/api/v1/version"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s

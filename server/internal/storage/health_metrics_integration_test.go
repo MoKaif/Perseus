@@ -132,3 +132,38 @@ func TestDifferentSourceUUIDDoesNotOverwriteImmutableSample(t *testing.T) {
 		t.Errorf("stored qty %v and UUID %s, want 55 and %s", qty, storedID, firstID)
 	}
 }
+
+// TestDailySeriesUsesRequestedTimezone prevents movement around local midnight
+// from appearing on the adjacent day when the database session runs in UTC.
+func TestDailySeriesUsesRequestedTimezone(t *testing.T) {
+	db := healthMetricTestDB(t)
+	ctx := context.Background()
+	rows := []models.HealthMetricRow{
+		{Time: time.Date(2026, 9, 11, 18, 29, 0, 0, time.UTC), UserID: 1, MetricName: "step_count", Units: "count", Qty: float64Pointer(20)},
+		{Time: time.Date(2026, 9, 11, 18, 31, 0, 0, time.UTC), UserID: 1, MetricName: "step_count", Units: "count", Qty: float64Pointer(30)},
+	}
+	if _, err := db.InsertHealthMetrics(ctx, rows); err != nil {
+		t.Fatalf("inserting samples around local midnight: %v", err)
+	}
+
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 9, 11, 0, 0, 0, 0, loc)
+	end := time.Date(2026, 9, 13, 0, 0, 0, 0, loc)
+	series, err := db.GetDailySeries(ctx, 1, []string{"step_count"}, start, end, "Asia/Kolkata")
+	if err != nil {
+		t.Fatalf("querying local daily series: %v", err)
+	}
+	points := series["step_count"]
+	if len(points) != 2 {
+		t.Fatalf("got %d daily points, want 2", len(points))
+	}
+	if got := points[0].Day.Format("2006-01-02"); got != "2026-09-11" || points[0].Value != 20 {
+		t.Errorf("first point = %s, %v; want 2026-09-11, 20", got, points[0].Value)
+	}
+	if got := points[1].Day.Format("2006-01-02"); got != "2026-09-12" || points[1].Value != 30 {
+		t.Errorf("second point = %s, %v; want 2026-09-12, 30", got, points[1].Value)
+	}
+}

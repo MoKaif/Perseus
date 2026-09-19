@@ -130,8 +130,8 @@ func TailscaleIdentity(lc whoisClient, db userStore, log *slog.Logger) func(http
 			if whois.Node != nil {
 				parts := strings.Split(strings.TrimSuffix(whois.Node.Name, "."), ".")
 				if len(parts) >= 3 {
-					tsID = parts[0]                           // just hostname
-					tailnet = strings.Join(parts[1:], ".")    // tailnet-name.ts.net
+					tsID = parts[0]                        // just hostname
+					tailnet = strings.Join(parts[1:], ".") // tailnet-name.ts.net
 				} else {
 					tsID = whois.Node.Name
 				}
@@ -152,8 +152,14 @@ func TailscaleIdentity(lc whoisClient, db userStore, log *slog.Logger) func(http
 // DevIdentity returns middleware that sets user_id=1 for all requests.
 // Used when Tailscale is disabled (local development).
 func DevIdentity(next http.Handler) http.Handler {
+	return DevIdentityFor(1, next)
+}
+
+// DevIdentityFor assigns an explicit local user. It is intended for a
+// loopback-only API behind the LAN Vite proxy, never for production auth.
+func DevIdentityFor(userID int, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), userIDKey, 1)
+		ctx := context.WithValue(r.Context(), userIDKey, userID)
 		ctx = context.WithValue(ctx, userInfoKey, UserInfo{Login: "local", DisplayName: "Local Dev User"})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

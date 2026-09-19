@@ -10,11 +10,12 @@ import {
 
 export type ThemePreference = "auto" | "light" | "dark";
 
-const STORAGE_KEY = "freereps.theme";
+const STORAGE_KEY = "perseus.theme";
+const LEGACY_STORAGE_KEY = "freereps.theme";
 
 function readStored(): ThemePreference {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
     if (raw === "light" || raw === "dark" || raw === "auto") return raw;
   } catch {
     // localStorage is unavailable in private windows on some browsers.
