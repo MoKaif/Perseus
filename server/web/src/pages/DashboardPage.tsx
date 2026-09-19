@@ -1,7 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, type CSSProperties } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { fetchFrontPage, type FrontPageMetric } from "../api";
+import {
+  fetchFrontPage,
+  fetchSleep,
+  type FrontPageMetric,
+  type SleepSession,
+} from "../api";
 import { formatTimeAgo } from "../utils/format";
 
 const DAY_MS = 86_400_000;
@@ -111,6 +116,13 @@ export default function DashboardPage() {
     queryFn: () => fetchFrontPage("2y", timezone),
     staleTime: 60_000,
   });
+  // Include the evening before the selected wake date so overnight stages are
+  // present alongside the session that HealthKit assigns to this day.
+  const sleepQuery = useQuery({
+    queryKey: ["overview-sleep", selected],
+    queryFn: () => fetchSleep(moveDay(selected, -1), moveDay(selected, 1)),
+    staleTime: 60_000,
+  });
 
   const metrics = useMemo(() => {
     if (!query.data) return new Map<string, DailyMetric>();
@@ -125,6 +137,10 @@ export default function DashboardPage() {
   const active = metrics.get("active_energy");
   const basal = metrics.get("basal_energy_burned");
   const walkingSpeed = metrics.get("walking_speed");
+  const heartRate = metrics.get("heart_rate");
+  const sleep = sleepQuery.data?.sessions.find(
+    (session) => session.Date.slice(0, 10) === selected,
+  ) ?? null;
   const selectedDate = dateFromKey(selected);
   const isToday = selected === today;
   const hasAny = [...metrics.values()].some((metric) => metric.value != null);
@@ -221,6 +237,13 @@ export default function DashboardPage() {
             </article>
           </section>
 
+          <RecoveryVitals
+            sleep={sleep}
+            heartRate={heartRate}
+            selected={selected}
+            loading={sleepQuery.isLoading}
+          />
+
           <section className="analytics-grid page-x">
             {steps ? <MovementHistory metric={steps} selected={selected} windowStart={query.data!.window_start} /> : null}
             <aside className="telemetry-card day-facts-card">
@@ -260,6 +283,96 @@ function ActivityRow({ label, value, accent }: { label: string; value: string; a
 
 function SummaryMetric({ label, metric }: { label: string; metric?: DailyMetric }) {
   return <div className="summary-metric"><span>{label}</span><strong>{formatValue(metric)}</strong><small>{metric ? comparison(metric.change) : "No reading"}</small></div>;
+}
+
+function RecoveryVitals({
+  sleep,
+  heartRate,
+  selected,
+  loading,
+}: {
+  sleep: SleepSession | null;
+  heartRate?: DailyMetric;
+  selected: string;
+  loading: boolean;
+}) {
+  const hasHeartReading = heartRate?.value != null;
+  if (!sleep && !hasHeartReading && !loading) {
+    return (
+      <section className="incoming-data page-x">
+        <span>◌</span>
+        <div><strong>Recovery data is ready to arrive</strong><p>Sleep and manual heart-rate readings will appear here automatically after Health syncs them.</p></div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="recovery-grid page-x" aria-label="Recovery and heart rate">
+      {sleep ? <SleepOverview session={sleep} /> : loading ? <article className="telemetry-card recovery-loading"><span className="skel" /></article> : null}
+      {hasHeartReading ? <HeartRateOverview metric={heartRate!} selected={selected} /> : null}
+    </section>
+  );
+}
+
+function SleepOverview({ session }: { session: SleepSession }) {
+  const hours = session.Asleep || session.TotalSleep;
+  const efficiency = session.InBed > 0 ? Math.round((session.Asleep / session.InBed) * 100) : null;
+  const stages = [
+    { label: "Deep", value: session.Deep, color: "#245a45" },
+    { label: "REM", value: session.REM, color: "#a3ff6b" },
+    { label: "Core", value: session.Core, color: "#4f7569" },
+  ].filter((stage) => stage.value > 0);
+  const stageTotal = stages.reduce((sum, stage) => sum + stage.value, 0);
+
+  return (
+    <article className="telemetry-card sleep-overview-card">
+      <CardHeading label="Sleep & recovery" meta={efficiency == null ? "Synced" : `${efficiency}% efficiency`} />
+      <div className="sleep-main"><strong>{formatSleepDuration(hours)}</strong><span>{formatClockRange(session.SleepStart, session.SleepEnd)}</span></div>
+      {stages.length ? (
+        <>
+          <div className="sleep-stage-bar">
+            {stages.map((stage) => <i key={stage.label} title={`${stage.label}: ${formatSleepDuration(stage.value)}`} style={{ width: `${(stage.value / stageTotal) * 100}%`, background: stage.color }} />)}
+          </div>
+          <div className="sleep-stage-legend">
+            {stages.map((stage) => <div key={stage.label}><span>{stage.label}</span><strong>{formatSleepDuration(stage.value)}</strong></div>)}
+          </div>
+        </>
+      ) : <p className="sleep-note">Total sleep is available; detailed stages have not arrived yet.</p>}
+    </article>
+  );
+}
+
+function HeartRateOverview({ metric, selected }: { metric: DailyMetric; selected: string }) {
+  const latestIsSelectedDay = metric.meta.time && localDateKey(new Date(metric.meta.time)) === selected;
+  const latest = latestIsSelectedDay && metric.meta.latest != null
+    ? metric.meta.latest * (metric.meta.multiplier || 1)
+    : metric.value;
+  const checkedAt = latestIsSelectedDay
+    ? new Date(metric.meta.time).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : null;
+
+  return (
+    <article className="telemetry-card heart-overview-card">
+      <CardHeading label="Heart rate" meta="Manual reading" />
+      <div className="heart-reading"><strong>{latest == null ? "—" : Math.round(latest)}</strong><span>bpm</span></div>
+      <p>{checkedAt ? `Latest check at ${checkedAt}` : "Daily average from recorded checks"}</p>
+      <div className="heart-context">
+        <div><span>Day average</span><strong>{metric.value == null ? "—" : `${Math.round(metric.value)} bpm`}</strong></div>
+        <div><span>Compared with usual</span><strong>{comparison(metric.change)}</strong></div>
+      </div>
+    </article>
+  );
+}
+
+function formatSleepDuration(hours: number) {
+  const totalMinutes = Math.round(hours * 60);
+  return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
+}
+
+function formatClockRange(start: string, end: string) {
+  if (!start || !end) return "Overnight session";
+  const format = (value: string) => new Date(value).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${format(start)} → ${format(end)}`;
 }
 
 function storySentence(steps: DailyMetric | undefined, distance: DailyMetric | undefined, active: DailyMetric | undefined, isToday: boolean) {
