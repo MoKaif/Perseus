@@ -232,8 +232,14 @@ func (db *DB) backfillUserSleepSessions(ctx context.Context, log *slog.Logger, u
 			`INSERT INTO sleep_sessions (user_id, date, total_sleep, asleep, core, deep, rem, in_bed, sleep_start, sleep_end, in_bed_start, in_bed_end)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 			 ON CONFLICT (user_id, date) DO UPDATE SET
-			   total_sleep = EXCLUDED.total_sleep,
-			   asleep = EXCLUDED.asleep
+			   total_sleep = LEAST(
+			     EXCLUDED.total_sleep,
+			     EXTRACT(EPOCH FROM (sleep_sessions.sleep_end - sleep_sessions.sleep_start)) / 3600.0
+			   ),
+			   asleep = LEAST(
+			     EXCLUDED.asleep,
+			     EXTRACT(EPOCH FROM (sleep_sessions.sleep_end - sleep_sessions.sleep_start)) / 3600.0
+			   )
 			 WHERE EXCLUDED.total_sleep > 0
 			   AND (
 			     sleep_sessions.total_sleep <= 0
