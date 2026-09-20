@@ -206,6 +206,7 @@ func (db *DB) backfillUserSleepSessions(ctx context.Context, log *slog.Logger, u
 		sleepEnd := night[len(night)-1].EndTime
 
 		totalSleep, core, deep, rem := sleepDurations(night)
+		totalSleep = clampSleepDuration(totalSleep, sleepStart, sleepEnd)
 		inBed := sleepEnd.Sub(sleepStart).Hours()
 		date := sleepEnd.Truncate(24 * time.Hour)
 
@@ -233,8 +234,14 @@ func (db *DB) backfillUserSleepSessions(ctx context.Context, log *slog.Logger, u
 			 ON CONFLICT (user_id, date) DO UPDATE SET
 			   total_sleep = EXCLUDED.total_sleep,
 			   asleep = EXCLUDED.asleep
-			 WHERE sleep_sessions.total_sleep <= 0
-			   AND EXCLUDED.total_sleep > 0`,
+			 WHERE EXCLUDED.total_sleep > 0
+			   AND (
+			     sleep_sessions.total_sleep <= 0
+			     OR (
+			       sleep_sessions.core = 0 AND sleep_sessions.deep = 0 AND sleep_sessions.rem = 0
+			       AND sleep_sessions.total_sleep > EXTRACT(EPOCH FROM (sleep_sessions.sleep_end - sleep_sessions.sleep_start)) / 3600.0
+			     )
+			   )`,
 			session.UserID, session.Date, session.TotalSleep, session.Asleep,
 			session.Core, session.Deep, session.REM, session.InBed,
 			session.SleepStart, session.SleepEnd, session.InBedStart, session.InBedEnd)
@@ -289,4 +296,12 @@ func sleepDurations(stages []models.SleepStageRow) (total, core, deep, rem float
 		total = unspecified
 	}
 	return total, core, deep, rem
+}
+
+func clampSleepDuration(total float64, start, end time.Time) float64 {
+	window := end.Sub(start).Hours()
+	if window > 0 && total > window {
+		return window
+	}
+	return total
 }

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"testing"
+	"time"
 
 	"github.com/claude/freereps/internal/models"
 )
@@ -15,6 +16,18 @@ func TestSleepDurationsUsesGenericAsleep(t *testing.T) {
 	})
 	if total != 6.5 || core != 0 || deep != 0 || rem != 0 {
 		t.Fatalf("sleepDurations() = %.2f, %.2f, %.2f, %.2f; want 6.5, 0, 0, 0", total, core, deep, rem)
+	}
+}
+
+// TestClampSleepDuration prevents overlapping duplicate samples from reporting
+// more sleep than fits inside the canonical session window.
+func TestClampSleepDuration(t *testing.T) {
+	start := time.Date(2026, 9, 20, 1, 8, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 20, 7, 58, 0, 0, time.UTC)
+	got := clampSleepDuration(14.22, start, end)
+	want := 6.0 + 50.0/60.0
+	if got != want {
+		t.Fatalf("clampSleepDuration() = %.4f, want %.4f", got, want)
 	}
 }
 

@@ -23,15 +23,22 @@ export function effectiveSleepHours(
     "TotalSleep" | "Asleep" | "Core" | "Deep" | "REM" | "SleepStart" | "SleepEnd"
   >,
 ): number {
-  if (session.Asleep > 0) return session.Asleep;
-  if (session.TotalSleep > 0) return session.TotalSleep;
-  const detailed = session.Core + session.Deep + session.REM;
-  if (detailed > 0) return detailed;
-
   const start = new Date(session.SleepStart).getTime();
   const end = new Date(session.SleepEnd).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
-  return (end - start) / 3_600_000;
+  const windowHours =
+    Number.isFinite(start) && Number.isFinite(end) && end > start
+      ? (end - start) / 3_600_000
+      : 0;
+  const recorded = session.Asleep > 0 ? session.Asleep : session.TotalSleep;
+  if (recorded > 0) {
+    return windowHours > 0 && recorded > windowHours ? windowHours : recorded;
+  }
+  const detailed = session.Core + session.Deep + session.REM;
+  if (detailed > 0) {
+    return windowHours > 0 && detailed > windowHours ? windowHours : detailed;
+  }
+
+  return windowHours;
 }
 
 const DETAILED_STAGES = new Set(["Core", "Deep", "REM"]);

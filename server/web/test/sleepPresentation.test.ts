@@ -40,6 +40,18 @@ test("duration falls back to the generic sleep window", () => {
   );
 });
 
+// Prevents duplicate generic samples from displaying more sleep than the session contains.
+test("duration is capped by the sleep window", () => {
+  assert.equal(
+    effectiveSleepHours({
+      ...durationOnlySession,
+      TotalSleep: 14.22,
+      Asleep: 14.22,
+    }),
+    6 + 50 / 60,
+  );
+});
+
 // Preserves the richer UI when a future device supplies any real sleep stage.
 test("a detailed sample or aggregate enables stage analysis", () => {
   assert.equal(hasDetailedSleepData([{ Stage: "REM" }], durationOnlySession), true);
@@ -54,9 +66,27 @@ test("baseline uses the median of previous nights", () => {
   const result = previousSleepMedian(
     [
       durationOnlySession,
-      { ...durationOnlySession, Date: "2026-09-19", TotalSleep: 6, Asleep: 6 },
-      { ...durationOnlySession, Date: "2026-09-18", TotalSleep: 8, Asleep: 8 },
-      { ...durationOnlySession, Date: "2026-09-17", TotalSleep: 12, Asleep: 12 },
+      {
+        ...durationOnlySession,
+        Date: "2026-09-19",
+        TotalSleep: 6,
+        Asleep: 6,
+        SleepStart: "2026-09-20T01:58:00+05:30",
+      },
+      {
+        ...durationOnlySession,
+        Date: "2026-09-18",
+        TotalSleep: 8,
+        Asleep: 8,
+        SleepStart: "2026-09-19T23:58:00+05:30",
+      },
+      {
+        ...durationOnlySession,
+        Date: "2026-09-17",
+        TotalSleep: 12,
+        Asleep: 12,
+        SleepStart: "2026-09-19T19:58:00+05:30",
+      },
     ],
     durationOnlySession.Date,
   );
