@@ -8,6 +8,10 @@ import {
   type SleepSession,
 } from "../api";
 import { formatTimeAgo } from "../utils/format";
+import {
+  effectiveSleepHours,
+  hasDetailedSleepData,
+} from "../utils/sleepPresentation";
 
 const DAY_MS = 86_400_000;
 const CORE_METRICS = [
@@ -315,8 +319,11 @@ function RecoveryVitals({
 }
 
 function SleepOverview({ session }: { session: SleepSession }) {
-  const hours = session.Asleep || session.TotalSleep;
-  const efficiency = session.InBed > 0 ? Math.round((session.Asleep / session.InBed) * 100) : null;
+  const hours = effectiveSleepHours(session);
+  const hasStageDetail = hasDetailedSleepData([], session);
+  const efficiency = hasStageDetail && session.InBed > 0
+    ? Math.round((hours / session.InBed) * 100)
+    : null;
   const stages = [
     { label: "Deep", value: session.Deep, color: "#245a45" },
     { label: "REM", value: session.REM, color: "#a3ff6b" },
@@ -326,7 +333,7 @@ function SleepOverview({ session }: { session: SleepSession }) {
 
   return (
     <article className="telemetry-card sleep-overview-card">
-      <CardHeading label="Sleep & recovery" meta={efficiency == null ? "Synced" : `${efficiency}% efficiency`} />
+      <CardHeading label="Sleep & recovery" meta={efficiency == null ? "Duration only" : `${efficiency}% efficiency`} />
       <div className="sleep-main"><strong>{formatSleepDuration(hours)}</strong><span>{formatClockRange(session.SleepStart, session.SleepEnd)}</span></div>
       {stages.length ? (
         <>

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  effectiveSleepHours,
   hasDetailedSleepData,
   previousSleepMedian,
 } from "../src/utils/sleepPresentation.ts";
@@ -8,9 +9,12 @@ import {
 const durationOnlySession = {
   Date: "2026-09-20",
   TotalSleep: 7.5,
+  Asleep: 7.5,
   Core: 0,
   Deep: 0,
   REM: 0,
+  SleepStart: "2026-09-20T01:08:00+05:30",
+  SleepEnd: "2026-09-20T07:58:00+05:30",
 };
 
 // Prevents generic HealthKit Asleep samples from rendering as a staged hypnogram.
@@ -21,6 +25,18 @@ test("generic asleep and awake samples stay in duration-only mode", () => {
       durationOnlySession,
     ),
     false,
+  );
+});
+
+// Keeps legacy zero-value aggregates useful until the idempotent backend repair runs.
+test("duration falls back to the generic sleep window", () => {
+  assert.equal(
+    effectiveSleepHours({
+      ...durationOnlySession,
+      TotalSleep: 0,
+      Asleep: 0,
+    }),
+    6 + 50 / 60,
   );
 });
 
@@ -38,9 +54,9 @@ test("baseline uses the median of previous nights", () => {
   const result = previousSleepMedian(
     [
       durationOnlySession,
-      { ...durationOnlySession, Date: "2026-09-19", TotalSleep: 6 },
-      { ...durationOnlySession, Date: "2026-09-18", TotalSleep: 8 },
-      { ...durationOnlySession, Date: "2026-09-17", TotalSleep: 12 },
+      { ...durationOnlySession, Date: "2026-09-19", TotalSleep: 6, Asleep: 6 },
+      { ...durationOnlySession, Date: "2026-09-18", TotalSleep: 8, Asleep: 8 },
+      { ...durationOnlySession, Date: "2026-09-17", TotalSleep: 12, Asleep: 12 },
     ],
     durationOnlySession.Date,
   );

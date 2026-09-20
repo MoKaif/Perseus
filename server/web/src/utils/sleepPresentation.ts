@@ -5,9 +5,33 @@ export interface SleepStageLike {
 export interface SleepSessionLike {
   Date: string;
   TotalSleep: number;
+  Asleep: number;
   Core: number;
   Deep: number;
   REM: number;
+  SleepStart: string;
+  SleepEnd: string;
+}
+
+/**
+ * Return the recorded duration, falling back to the sleep window for legacy
+ * zero-value aggregates created from generic Asleep samples.
+ */
+export function effectiveSleepHours(
+  session: Pick<
+    SleepSessionLike,
+    "TotalSleep" | "Asleep" | "Core" | "Deep" | "REM" | "SleepStart" | "SleepEnd"
+  >,
+): number {
+  if (session.Asleep > 0) return session.Asleep;
+  if (session.TotalSleep > 0) return session.TotalSleep;
+  const detailed = session.Core + session.Deep + session.REM;
+  if (detailed > 0) return detailed;
+
+  const start = new Date(session.SleepStart).getTime();
+  const end = new Date(session.SleepEnd).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return (end - start) / 3_600_000;
 }
 
 const DETAILED_STAGES = new Set(["Core", "Deep", "REM"]);
@@ -34,9 +58,10 @@ export function previousSleepMedian(
   displayedDate: string,
 ): { hours: number; nights: number } | null {
   const values = sessions
-    .filter((session) => session.Date !== displayedDate && session.TotalSleep > 0)
+    .filter((session) => session.Date !== displayedDate)
     .slice(0, 28)
-    .map((session) => session.TotalSleep)
+    .map(effectiveSleepHours)
+    .filter((hours) => hours > 0)
     .sort((a, b) => a - b);
 
   if (values.length === 0) return null;

@@ -139,8 +139,8 @@ func (db *DB) SleepStageUserIDs(ctx context.Context) ([]int, error) {
 }
 
 // BackfillSleepSessions synthesizes sleep sessions from existing sleep stages
-// that don't yet have corresponding sessions. Called at server startup and
-// after each HAE TCP import. Idempotent (ON CONFLICT DO NOTHING).
+// and repairs zero-duration sessions when usable stages already exist. Called
+// at server startup and after each HAE TCP import; both paths are idempotent.
 func (db *DB) BackfillSleepSessions(ctx context.Context, log *slog.Logger) error {
 	userIDs, err := db.SleepStageUserIDs(ctx)
 	if err != nil {
@@ -205,23 +205,7 @@ func (db *DB) backfillUserSleepSessions(ctx context.Context, log *slog.Logger, u
 		sleepStart := night[0].StartTime
 		sleepEnd := night[len(night)-1].EndTime
 
-		var deep, core, rem, awake, inBedDur float64
-		for _, s := range night {
-			switch s.Stage {
-			case "Deep":
-				deep += s.DurationHr
-			case "Core":
-				core += s.DurationHr
-			case "REM":
-				rem += s.DurationHr
-			case "Awake":
-				awake += s.DurationHr
-			case "In Bed":
-				inBedDur += s.DurationHr
-			}
-		}
-
-		totalSleep := deep + core + rem
+		totalSleep, core, deep, rem := sleepDurations(night)
 		inBed := sleepEnd.Sub(sleepStart).Hours()
 		date := sleepEnd.Truncate(24 * time.Hour)
 
@@ -240,12 +224,17 @@ func (db *DB) backfillUserSleepSessions(ctx context.Context, log *slog.Logger, u
 			InBedEnd:   sleepEnd,
 		}
 
-		// Use DO NOTHING: backfill is a fallback — don't overwrite sessions
-		// from direct sources (Oura, HAE) which have more accurate data.
+		// Backfill remains subordinate to direct sources. The narrow update only
+		// repairs sessions whose duration was previously stored as zero because
+		// generic Asleep samples were ignored.
 		tag, err := db.Pool.Exec(ctx,
 			`INSERT INTO sleep_sessions (user_id, date, total_sleep, asleep, core, deep, rem, in_bed, sleep_start, sleep_end, in_bed_start, in_bed_end)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-			 ON CONFLICT (user_id, date) DO NOTHING`,
+			 ON CONFLICT (user_id, date) DO UPDATE SET
+			   total_sleep = EXCLUDED.total_sleep,
+			   asleep = EXCLUDED.asleep
+			 WHERE sleep_sessions.total_sleep <= 0
+			   AND EXCLUDED.total_sleep > 0`,
 			session.UserID, session.Date, session.TotalSleep, session.Asleep,
 			session.Core, session.Deep, session.REM, session.InBed,
 			session.SleepStart, session.SleepEnd, session.InBedStart, session.InBedEnd)
@@ -253,7 +242,7 @@ func (db *DB) backfillUserSleepSessions(ctx context.Context, log *slog.Logger, u
 			return created, fmt.Errorf("inserting backfill session: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
-			continue // session already exists from a direct source
+			continue // an existing non-zero session remains authoritative
 		}
 		created++
 
@@ -275,4 +264,29 @@ func (db *DB) backfillUserSleepSessions(ctx context.Context, log *slog.Logger, u
 		log.Info("backfilled sleep sessions for user", "user_id", userID, "sessions", created)
 	}
 	return created, nil
+}
+
+// sleepDurations prefers real Core/Deep/REM stages when present. A generic
+// Asleep sample is the fallback for devices that only report sleep duration;
+// adding both would double-count providers that publish overlapping samples.
+func sleepDurations(stages []models.SleepStageRow) (total, core, deep, rem float64) {
+	var unspecified float64
+	for _, stage := range stages {
+		switch stage.Stage {
+		case models.SleepStageCore:
+			core += stage.DurationHr
+		case models.SleepStageDeep:
+			deep += stage.DurationHr
+		case models.SleepStageREM:
+			rem += stage.DurationHr
+		case models.SleepStageAsleep:
+			unspecified += stage.DurationHr
+		}
+	}
+
+	total = core + deep + rem
+	if total == 0 {
+		total = unspecified
+	}
+	return total, core, deep, rem
 }

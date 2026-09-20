@@ -17,6 +17,7 @@ import {
 } from "../utils/format";
 import { stageColor } from "../utils/stageColors";
 import {
+  effectiveSleepHours,
   hasDetailedSleepData,
   previousSleepMedian,
 } from "../utils/sleepPresentation";
@@ -45,7 +46,16 @@ export default function SleepPage() {
   const state = queryState(query);
   const message = queryMessage(state, query.error);
 
-  const sessions = query.data?.sessions ?? [];
+  const sessions = useMemo(
+    () =>
+      (query.data?.sessions ?? []).map((session) => {
+        const duration = effectiveSleepHours(session);
+        return duration === session.TotalSleep
+          ? session
+          : { ...session, TotalSleep: duration, Asleep: duration };
+      }),
+    [query.data?.sessions],
+  );
   const stages = query.data?.stages ?? [];
 
   // The API returns newest first; the last night is the summary's subject.
