@@ -29,7 +29,7 @@ test("generic asleep and awake samples stay in duration-only mode", () => {
 });
 
 // Keeps legacy zero-value aggregates useful until the idempotent backend repair runs.
-test("duration falls back to the generic sleep window", () => {
+test("duration uses the sleep window when the aggregate is zero", () => {
   assert.equal(
     effectiveSleepHours({
       ...durationOnlySession,
